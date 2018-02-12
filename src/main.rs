@@ -1,8 +1,55 @@
 use std::cmp::Eq;
 use std::hash::Hash;
 use std::collections::HashMap;
+use std::cell::RefCell;
 
 type Num = f32;
+type Sample = Vec<Num>;
+
+
+#[derive(Debug)]
+struct Split {
+    feature: usize,
+    point: Num,
+    gain: Num,
+
+}
+
+impl Split {
+    fn new() -> Self {
+        Split {
+            feature: 0,
+            point: 0.0,
+            gain: 0.0,
+        }
+    }
+}
+
+
+#[derive(Debug)]
+struct TreeNode {
+    pub split: Split,
+    pub left_child: Option<Box<TreeNode>>,
+    pub right_child: Option<Box<TreeNode>>,
+}
+
+impl TreeNode {
+    fn new(split: Split) -> Self {
+        TreeNode {
+            split,
+            left_child: None,
+            right_child: None,
+        }
+    }
+}
+
+
+/*
+struct Dataset<'a> {
+    label_i: usize,
+    data: Vec<Sample<'a>>,
+}
+*/
 
 
 fn count_dist<T: Hash + Eq + Clone>(data: &Vec<T>) -> Vec<Num> {
@@ -23,27 +70,31 @@ fn count_dist<T: Hash + Eq + Clone>(data: &Vec<T>) -> Vec<Num> {
     hm.into_iter().map(|(_, v)| v).collect()
 }
 
+
+#[allow(dead_code)]
 fn gini(dist: &Vec<Num>) -> Num {
     dist.iter().fold(1.0, |acc, &x| acc - x*x)
 }
+
 
 fn entropy(dist: &Vec<Num>) -> Num {
     -dist.iter().fold(0.0, |acc, &x| acc + x * x.log2())
 }
 
 
-fn set_entropy(data: &[Vec<Num>], label_i: usize) -> Num {
+fn get_slice_entropy(data: &[&Sample], label_i: usize) -> Num {
     let labels = data.iter().map(|x| x[label_i] as i32).collect();
     entropy(&count_dist(&labels))
 }
 
 
-fn feature_split(data: &mut Vec<Vec<Num>>, feature_i: usize, label_i: usize) -> (Num, Num) {
+fn feature_split(data: &mut Vec<&Sample>, feature_i: usize, label_i: usize) -> (Num, Num) {
     // Sort the data by the feature
     data.sort_by(|a, b| a[feature_i].partial_cmp(&b[feature_i]).unwrap());
+    //println!("{:?}\n~~~~~~~~~~~~~~~~~~~~~", data);
 
     // Calculate the current entropy before any split
-    let parent_entropy = set_entropy(data, label_i);
+    let parent_entropy = get_slice_entropy(data, label_i);
 
     let (mut best_split_point, mut best_info_gain) = (0.0, 0.0);
 
@@ -53,8 +104,8 @@ fn feature_split(data: &mut Vec<Vec<Num>>, feature_i: usize, label_i: usize) -> 
         let left  = &data[..i+1];
         let right = &data[i+1..];
 
-        let left_entropy = set_entropy(left, label_i);
-        let right_entropy = set_entropy(right, label_i);
+        let left_entropy = get_slice_entropy(left, label_i);
+        let right_entropy = get_slice_entropy(right, label_i);
 
         let ttl_entropy = ((i+1) as f32 * left_entropy +
                            ((data.len()-(i+1)) as f32) * right_entropy) /
@@ -72,36 +123,55 @@ fn feature_split(data: &mut Vec<Vec<Num>>, feature_i: usize, label_i: usize) -> 
 }
 
 
-fn calc_split(data: &mut Vec<Vec<Num>>, label_i: usize) -> (Num, Num, usize) {
-    let (mut best_ig, mut best_sp, mut best_i) = (0.0, 0.0, 0);
+fn calc_split(data: &mut Vec<&Sample>, label_i: usize) -> Split {
+    let mut split = Split::new();
 
     // Loop through features to find the best feature to use
     for i in 0..data[0].len() {
         if i != label_i {
-            println!("Calculating feature split on feature {}", i);
             let (ig, sp) = feature_split(data, i, label_i);
-            println!("Information gain: {} | Split point: {}", ig, sp);
-            if ig > best_ig {
-                best_ig = ig;
-                best_sp = sp;
-                best_i = i;
+            //println!("Split on feature: {} | Information gain: {} | Split point: {}",i, ig, sp);
+            if ig > split.gain {
+                split.feature = i;
+                split.point = sp;
+                split.gain = ig;
             }
         }
     }
 
-    (best_ig, best_sp, best_i)
+    split
 }
 
 
-/*
-fn fit_tree(data: &mut Vec<Vec<Num>>, label_i: usize) {
+fn fit_tree(data: &mut Vec<&Sample>, label_i: usize, depth: i32) -> Option<Box<TreeNode>> {
+    if data.len() <= 6 {
+        return None;
+    }
 
-    calc_split(data, label_i)
+    println!("\ndepth: {} | data size: {}", depth, data.len());
+    let mut cur = Box::new(TreeNode::new(calc_split(data, label_i)));
+    println!("{:?}", cur.split);
+
+    if cur.split.gain > 0.0 {
+        let mut left: Vec<&Sample> = data.iter()
+                                         .filter(|x| x[cur.split.feature] < cur.split.point)
+                                         .map(|x| *x).collect();
+        let mut right: Vec<&Sample> = data.iter()
+                                          .filter(|x| x[cur.split.feature] >= cur.split.point)
+                                          .map(|x| *x).collect();
+
+        cur.left_child = fit_tree(&mut left, label_i, depth + 1);
+        cur.right_child = fit_tree(&mut right, label_i, depth + 1);
+
+        return Some(cur);
+    } else {
+        return None;
+    }
 }
-*/
 
 
 fn main() {
+    /*
     let mut sample_data = vec![
         vec![2.771244718, 1.784783929, 0.0],
         vec![1.728571309, 1.169761413, 0.0],
@@ -114,8 +184,9 @@ fn main() {
         vec![10.12493903, 3.234550982, 1.0],
         vec![6.642287351, 3.319983761, 1.0],
     ];
+    */
 
-    let mut iris_data = vec![
+    let temp_iris_data = vec![
         vec![5.1,3.5,1.4,0.2,1.0],
         vec![4.9,3.0,1.4,0.2,1.0],
         vec![4.7,3.2,1.3,0.2,1.0],
@@ -268,7 +339,12 @@ fn main() {
         vec![5.9,3.0,5.1,1.8,3.0],
     ];
 
+    let mut iris_data = Vec::new();
+    for s in 0..temp_iris_data.len() {
+        iris_data.push(&temp_iris_data[s]);
+    }
 
-    let split = calc_split(&mut iris_data, 4);
-    println!("{:?}", split);
+
+    let t = fit_tree(&mut iris_data, 4, 0);
+    println!("{:?}", t);
 }
